@@ -1042,32 +1042,32 @@ def scrape_public_view(args: argparse.Namespace) -> dict:
                 project = project_from_public_view(body.get("responseObject") or {})
         if project is not None:
             apply_registration_district(project, districts_by_id)
-            if args.enrich_details:
-                if last_request_at:
-                    wait = args.delay - (time.monotonic() - last_request_at)
-                    if wait > 0:
-                        time.sleep(wait)
-                try:
-                    enrich_project_public_view(
-                        session,
-                        project,
-                        project_id,
-                        timeout=args.timeout,
-                        delay=args.delay,
-                        full_details=args.full_details,
-                    )
-                except (requests.Timeout, requests.ConnectionError, ScraperError) as exc:
-                    raise ScraperError(
-                        f"Public-view enrichment failed for id {project_id}: {exc}"
-                    ) from exc
-                last_request_at = time.monotonic()
             if district_label and not filter_projects([project], district_label):
                 print(
                     f"public view id {project_id}: {project.registration_number} "
-                    f"{project.district or 'unknown district'}",
+                    f"{project.district or 'unknown district'} (skipped district filter)",
                     file=sys.stderr,
                 )
             else:
+                if args.enrich_details:
+                    if last_request_at:
+                        wait = args.delay - (time.monotonic() - last_request_at)
+                        if wait > 0:
+                            time.sleep(wait)
+                    try:
+                        enrich_project_public_view(
+                            session,
+                            project,
+                            project_id,
+                            timeout=args.timeout,
+                            delay=args.delay,
+                            full_details=args.full_details,
+                        )
+                    except (requests.Timeout, requests.ConnectionError, ScraperError) as exc:
+                        raise ScraperError(
+                            f"Public-view enrichment failed for id {project_id}: {exc}"
+                        ) from exc
+                    last_request_at = time.monotonic()
                 collected.append(project)
                 print(
                     f"public view id {project_id}: {project.registration_number} "
