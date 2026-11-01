@@ -25,13 +25,15 @@ import tempfile
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Any, Iterable
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 from Crypto.Cipher import AES
 from Crypto.Hash import MD5
+
+from public_view_endpoints import PUBLIC_VIEW_DETAIL_CALLS
 
 BASE_URL = "https://maharera.maharashtra.gov.in"
 IT_ORIGIN = "https://maharerait.maharashtra.gov.in"
@@ -88,6 +90,36 @@ CSV_FIELDS = [
     "registration_date",
     "proposed_completion_date",
     "record_source",
+    "project_id",
+    "acknowledgement_number",
+    "project_description",
+    "project_current_status",
+    "project_application_date",
+    "address_line",
+    "street",
+    "locality",
+    "village",
+    "boundaries_east",
+    "boundaries_west",
+    "boundaries_north",
+    "boundaries_south",
+    "promoter_contact_person",
+    "promoter_office_building",
+    "promoter_office_district",
+    "promoter_office_taluka",
+    "promoter_office_pincode",
+    "promoter_mobile",
+    "promoter_email",
+    "user_profile_id",
+    "is_building",
+    "total_number_of_units",
+    "total_number_of_sold_units",
+    "project_fees_payable_amount",
+    "registration_certificate_dms_ref_no",
+    "extension_certificate_dms_ref_no",
+    "receipt_file_name",
+    "revised_completion_date",
+    "rerasubmission_number",
 ]
 
 
@@ -121,6 +153,37 @@ class Project:
     registration_date: str = ""
     proposed_completion_date: str = ""
     record_source: str = "listing"
+    project_id: str = ""
+    acknowledgement_number: str = ""
+    project_description: str = ""
+    project_current_status: str = ""
+    project_application_date: str = ""
+    address_line: str = ""
+    street: str = ""
+    locality: str = ""
+    village: str = ""
+    boundaries_east: str = ""
+    boundaries_west: str = ""
+    boundaries_north: str = ""
+    boundaries_south: str = ""
+    promoter_contact_person: str = ""
+    promoter_office_building: str = ""
+    promoter_office_district: str = ""
+    promoter_office_taluka: str = ""
+    promoter_office_pincode: str = ""
+    promoter_mobile: str = ""
+    promoter_email: str = ""
+    user_profile_id: str = ""
+    is_building: str = ""
+    total_number_of_units: str = ""
+    total_number_of_sold_units: str = ""
+    project_fees_payable_amount: str = ""
+    registration_certificate_dms_ref_no: str = ""
+    extension_certificate_dms_ref_no: str = ""
+    receipt_file_name: str = ""
+    revised_completion_date: str = ""
+    rerasubmission_number: str = ""
+    api_details: dict[str, Any] | None = None
 
 
 @dataclass
@@ -703,30 +766,144 @@ def apply_public_view_enrichment(project: Project, *, land: dict | None, promote
             project.pincode = str(promoter["pincode"]).strip()
 
 
+def _scalar(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def fetch_public_view_api_details(
+    session: requests.Session,
+    project_id: int,
+    *,
+    timeout: float,
+    delay: float,
+    full_details: bool,
+) -> dict[str, Any]:
+    """Call public-view detail endpoints and return responseObject payloads keyed by name."""
+    collected: dict[str, Any] = {}
+    last_request_at = 0.0
+    calls = PUBLIC_VIEW_DETAIL_CALLS if full_details else [
+        ("general_details", "/getProjectGeneralDetailsByProjectId", lambda pid: [{"projectId": pid}]),
+        ("land_address", "/getProjectLandAddressDetails", lambda pid: [{"projectId": pid}]),
+        (
+            "promoter_and_project",
+            "/getProjectAndAssociatedPromoterDetails",
+            lambda pid: [{"projectId": pid}],
+        ),
+    ]
+
+    for storage_key, path_suffix, payload_factory in calls:
+        payloads = payload_factory(project_id)
+        bucket: list[Any] = []
+        for payload in payloads:
+            if last_request_at and delay > 0:
+                wait = delay - (time.monotonic() - last_request_at)
+                if wait > 0:
+                    time.sleep(wait)
+            url = f"{PUBLIC_VIEW_API_BASE}{path_suffix}"
+            try:
+                body = _it_portal_json(session, url, payload, timeout=timeout)
+            except ScraperError:
+                last_request_at = time.monotonic()
+                continue
+            last_request_at = time.monotonic()
+            if str(body.get("status")) != "1":
+                continue
+            response_object = body.get("responseObject")
+            if response_object is None:
+                continue
+            if len(payloads) == 1:
+                collected[storage_key] = response_object
+            else:
+                bucket.append({"request": payload, "response": response_object})
+        if bucket:
+            collected[storage_key] = bucket
+    return collected
+
+
+def apply_api_details_to_project(project: Project, api_details: dict[str, Any]) -> None:
+    general = api_details.get("general_details")
+    if isinstance(general, dict):
+        if general.get("projectId") is not None:
+            project.project_id = _scalar(general.get("projectId"))
+        project.acknowledgement_number = _scalar(general.get("acknowledgementNumber"))
+        project.project_description = _scalar(general.get("projectDescription"))
+        project.project_current_status = _scalar(general.get("projectCurrentStatus"))
+        project.project_application_date = _scalar(general.get("projectApplicationDate"))[:10]
+        project.user_profile_id = _scalar(general.get("userProfileId"))
+        project.is_building = _scalar(general.get("isBuilding"))
+        project.total_number_of_units = _scalar(general.get("totalNumberOfUnits"))
+        project.total_number_of_sold_units = _scalar(general.get("totalNumberOfSoldUnits"))
+        project.project_fees_payable_amount = _scalar(general.get("projectFeesPayableAmount"))
+        project.registration_certificate_dms_ref_no = _scalar(
+            general.get("registrationCertificateDmsRefNo")
+        )
+        project.extension_certificate_dms_ref_no = _scalar(
+            general.get("extensionCertificateDmsRefNo")
+        )
+        project.receipt_file_name = _scalar(general.get("receiptFileName"))
+        project.revised_completion_date = _scalar(general.get("revisedDate"))[:10]
+        project.rerasubmission_number = _scalar(general.get("rerasubmissionNumber"))
+        if general.get("projectTypeName"):
+            project.project_type = _scalar(general.get("projectTypeName"))
+        if general.get("projectStatusName"):
+            project.listing_status = _scalar(general.get("projectStatusName"))
+        if general.get("reraRegistrationDate"):
+            project.registration_date = _scalar(general.get("reraRegistrationDate"))[:10]
+        if general.get("projectProposeComplitionDate"):
+            project.proposed_completion_date = _scalar(general.get("projectProposeComplitionDate"))[:10]
+        if general.get("promoterName"):
+            project.promoter_name = _scalar(general.get("promoterName"))
+
+    land = api_details.get("land_address")
+    if isinstance(land, dict):
+        apply_public_view_enrichment(project, land=land, promoter=None)
+        project.address_line = _scalar(land.get("addressLine"))
+        project.street = _scalar(land.get("street"))
+        project.locality = _scalar(land.get("locality"))
+        project.village = _scalar(land.get("villageName"))
+        project.boundaries_east = _scalar(land.get("boundariesEast"))
+        project.boundaries_west = _scalar(land.get("boundariesWest"))
+        project.boundaries_north = _scalar(land.get("boundariesNorth"))
+        project.boundaries_south = _scalar(land.get("boundariesSouth"))
+
+    promoter_bundle = api_details.get("promoter_and_project")
+    promoter = None
+    legal_land = None
+    if isinstance(promoter_bundle, dict):
+        promoter = promoter_bundle.get("promoterDetails")
+        project_details = promoter_bundle.get("projectDetails") or {}
+        legal_land = project_details.get("projectLegalLandAddressDetails")
+    apply_public_view_enrichment(project, land=legal_land, promoter=promoter)
+    if isinstance(promoter, dict):
+        project.promoter_contact_person = _scalar(promoter.get("contactPersonName"))
+        project.promoter_office_building = _scalar(promoter.get("buildingName"))
+        project.promoter_office_district = _scalar(promoter.get("districtName"))
+        project.promoter_office_taluka = _scalar(promoter.get("talukaName"))
+        project.promoter_office_pincode = _scalar(promoter.get("pincode"))
+        project.promoter_mobile = _scalar(promoter.get("mobileNo"))
+        project.promoter_email = _scalar(promoter.get("emailId"))
+
+
 def enrich_project_public_view(
     session: requests.Session,
     project: Project,
     project_id: int,
     *,
     timeout: float,
+    delay: float,
+    full_details: bool,
 ) -> None:
-    land_body = _it_portal_json(
+    api_details = fetch_public_view_api_details(
         session,
-        f"{PUBLIC_VIEW_API_BASE}/getProjectLandAddressDetails",
-        {"projectId": project_id},
+        project_id,
         timeout=timeout,
+        delay=delay,
+        full_details=full_details,
     )
-    land = land_body.get("responseObject") if str(land_body.get("status")) == "1" else None
-    promoter_body = _it_portal_json(
-        session,
-        f"{PUBLIC_VIEW_API_BASE}/getProjectAndAssociatedPromoterDetails",
-        {"projectId": project_id},
-        timeout=timeout,
-    )
-    promoter = None
-    if str(promoter_body.get("status")) == "1":
-        promoter = (promoter_body.get("responseObject") or {}).get("promoterDetails")
-    apply_public_view_enrichment(project, land=land, promoter=promoter)
+    project.api_details = api_details or None
+    apply_api_details_to_project(project, api_details)
 
 
 def project_from_public_view(payload: dict) -> Project | None:
@@ -741,6 +918,7 @@ def project_from_public_view(payload: dict) -> Project | None:
         return None
     project_id = payload.get("projectId")
     detail_url = f"{IT_ORIGIN}/public/project/view/{project_id}" if project_id else ""
+    project_id_text = _scalar(project_id)
     certificate_date = str(payload.get("registrationCertificateGenerationDate") or "").strip()
     extension_name = payload.get("extensionCertificateFileName")
     return Project(
@@ -764,6 +942,7 @@ def project_from_public_view(payload: dict) -> Project | None:
         registration_date=str(payload.get("reraRegistrationDate") or "")[:10],
         proposed_completion_date=str(payload.get("projectProposeComplitionDate") or "")[:10],
         record_source="public-view",
+        project_id=project_id_text,
     )
 
 
@@ -869,6 +1048,8 @@ def scrape_public_view(args: argparse.Namespace) -> dict:
                         project,
                         project_id,
                         timeout=args.timeout,
+                        delay=args.delay,
+                        full_details=args.full_details,
                     )
                 except (requests.Timeout, requests.ConnectionError, ScraperError) as exc:
                     raise ScraperError(
@@ -1008,6 +1189,8 @@ def scrape_listing(args: argparse.Namespace) -> dict:
                 project,
                 project_id,
                 timeout=args.timeout,
+                delay=args.delay,
+                full_details=args.full_details,
             )
             last_enrich_at = time.monotonic()
 
@@ -1153,6 +1336,24 @@ def build_parser() -> argparse.ArgumentParser:
         dest="enrich_details",
         action="store_false",
         help="Skip authenticatePublic and the land/promoter detail APIs.",
+    )
+    full = parser.add_mutually_exclusive_group()
+    full.add_argument(
+        "--full-details",
+        dest="full_details",
+        action="store_true",
+        default=True,
+        help=(
+            "With enrichment, call every public-view detail endpoint from the "
+            "portal bundle and store raw payloads under api_details in JSON "
+            "(default: on)."
+        ),
+    )
+    full.add_argument(
+        "--no-full-details",
+        dest="full_details",
+        action="store_false",
+        help="Only fetch general, land, and promoter endpoints (faster).",
     )
     parser.add_argument(
         "--start-id",

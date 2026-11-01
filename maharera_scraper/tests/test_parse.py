@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scrape_projects import (
     Client,
+    apply_api_details_to_project,
     apply_public_view_enrichment,
     apply_registration_district,
     build_listing_url,
@@ -207,6 +208,44 @@ class PublicViewEnrichmentTests(unittest.TestCase):
         self.assertEqual(project.district, "Thane")
         self.assertEqual(project.taluka, "Thane")
         self.assertEqual(project.pincode, "400601")
+
+    def test_apply_api_details_flattens_general_and_promoter(self):
+        project = project_from_public_view(
+            {
+                "projectId": 3,
+                "projectName": "UNNATHI WOODS PHASE VII A",
+                "projectRegistartionNo": "P51700000002",
+            }
+        )
+        self.assertIsNotNone(project)
+        assert project is not None
+        apply_api_details_to_project(
+            project,
+            {
+                "general_details": {
+                    "projectId": 3,
+                    "acknowledgementNumber": "REA51700000002",
+                    "projectCurrentStatus": "Certificate Signed",
+                    "userProfileId": 121106,
+                    "projectFeesPayableAmount": 50862.5,
+                },
+                "land_address": {
+                    "addressLine": "246 247/1 247/2",
+                    "districtName": "Thane",
+                    "pinCode": "400615",
+                },
+                "promoter_and_project": {
+                    "promoterDetails": {
+                        "promoterName": "UNNATHI ESTATES",
+                        "emailId": "cipher",
+                    }
+                },
+            },
+        )
+        self.assertEqual(project.acknowledgement_number, "REA51700000002")
+        self.assertEqual(project.address_line, "246 247/1 247/2")
+        self.assertEqual(project.promoter_email, "cipher")
+        self.assertEqual(project.user_profile_id, "121106")
 
 
 class ProxyTests(unittest.TestCase):

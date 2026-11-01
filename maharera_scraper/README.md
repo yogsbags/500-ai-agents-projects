@@ -133,7 +133,11 @@ Each card on the public list becomes one row:
 | `original_application_url` | View Original Application |
 | `source_page_url` | Listing URL that returned the card |
 
-JSON output wraps the rows with `source`, `fetched_at`, the filters actually sent, `reported_total`, and `pages_fetched`. CSV is the rows only.
+JSON output wraps the rows with `source`, `fetched_at`, the filters actually sent, `reported_total`, and `pages_fetched`. Each project row includes flat columns plus an `api_details` object when enrichment is on: every successful public-view endpoint response from the IT portal bundle (finance, buildings, inventory, documents, litigation, and so on). CSV carries the flat columns only; use JSON for the complete nested payloads. `--no-full-details` limits enrichment to general, land, and promoter calls.
+
+```bash
+python3 maharera_scraper/scrape_projects.py --source public-view --limit 1
+```
 
 ## Live-site limits
 
