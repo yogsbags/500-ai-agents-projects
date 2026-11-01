@@ -12,10 +12,13 @@ It does not log in, solve CAPTCHAs, or open certificate modals.
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import json
 import re
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -26,7 +29,19 @@ import requests
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://maharera.maharashtra.gov.in"
+IT_ORIGIN = "https://maharerait.maharashtra.gov.in"
 LISTING_PATH = "/projects-search-result"
+# Public "View Details" call used by /public/project/view/{id}. No login.
+PUBLIC_VIEW_URL = (
+    IT_ORIGIN
+    + "/api/maha-rera-public-view-project-registration-service"
+    + "/public/projectregistartion/getProjectGeneralDetailsByProjectId"
+)
+# AIA CA Issuers URL on the live maharerait certificate. The server sends a
+# different, older intermediate, so Python cannot build the chain until this
+# one is present. It chains to GlobalSign Root R46, which is in the system store.
+GLOBALSIGN_R46_OV_2025_URL = "http://secure.globalsign.com/cacert/gsgccr46ovtlsca2025.crt"
+GLOBALSIGN_R46_OV_2025_CN = "GlobalSign GCC R46 OV TLS CA 2025"
 DIVISION_PATH = "/get-division-data"
 DISTRICT_PATH = "/div-district-data"
 # Maharashtra, from the public project_state <select> on the search form.
@@ -54,6 +69,10 @@ CSV_FIELDS = [
     "detail_url",
     "original_application_url",
     "source_page_url",
+    "project_type",
+    "registration_date",
+    "proposed_completion_date",
+    "record_source",
 ]
 
 
@@ -83,6 +102,10 @@ class Project:
     detail_url: str
     original_application_url: str
     source_page_url: str
+    project_type: str = ""
+    registration_date: str = ""
+    proposed_completion_date: str = ""
+    record_source: str = "listing"
 
 
 @dataclass
@@ -497,6 +520,189 @@ def _load_divisions(client: Client, state_code: str) -> list[tuple[str, str]]:
     )
 
 
+def _transport_failure(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "timed out",
+            "timeout",
+            "handshake",
+            "connection aborted",
+            "connection reset",
+            "failed to establish",
+        )
+    )
+
+
+def it_portal_ca_bundle() -> str:
+    """Trust store plus the intermediate the IT portal certificate omits.
+
+    The downloaded certificate is kept only when OpenSSL says it chains to a
+    root already in the system store and its subject is the expected issuer.
+    """
+    import certifi
+
+    response = requests.get(
+        GLOBALSIGN_R46_OV_2025_URL,
+        timeout=20,
+        headers={"User-Agent": USER_AGENT},
+    )
+    response.raise_for_status()
+    directory = tempfile.mkdtemp(prefix="maharera-ca-")
+    der_path = f"{directory}/intermediate.crt"
+    pem_path = f"{directory}/intermediate.pem"
+    bundle_path = f"{directory}/ca-bundle.pem"
+    with open(der_path, "wb") as handle:
+        handle.write(response.content)
+    subprocess.run(
+        ["openssl", "x509", "-inform", "DER", "-in", der_path, "-out", pem_path],
+        check=True,
+        capture_output=True,
+    )
+    subject = subprocess.run(
+        ["openssl", "x509", "-in", pem_path, "-noout", "-subject"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if GLOBALSIGN_R46_OV_2025_CN not in subject:
+        raise ScraperError("GlobalSign intermediate subject did not match the IT portal issuer")
+    verified = subprocess.run(["openssl", "verify", pem_path], capture_output=True, text=True)
+    if verified.returncode != 0:
+        raise ScraperError(
+            "GlobalSign intermediate did not chain to a system trust root: "
+            + (verified.stderr or verified.stdout).strip()
+        )
+    with open(bundle_path, "wb") as handle:
+        handle.write(open(certifi.where(), "rb").read())
+        handle.write(b"\n")
+        handle.write(open(pem_path, "rb").read())
+    return bundle_path
+
+
+def project_from_public_view(payload: dict) -> Project | None:
+    """Map the public general-details object. Document ids and fees are left out."""
+    if not payload:
+        return None
+    registration = str(
+        payload.get("projectRegistartionNo") or payload.get("projectRegistrationNo") or ""
+    ).strip()
+    name = str(payload.get("projectName") or "").strip()
+    if not registration and not name:
+        return None
+    project_id = payload.get("projectId")
+    detail_url = f"{IT_ORIGIN}/public/project/view/{project_id}" if project_id else ""
+    certificate_date = str(payload.get("registrationCertificateGenerationDate") or "").strip()
+    extension_name = payload.get("extensionCertificateFileName")
+    return Project(
+        registration_number=registration,
+        project_name=name,
+        promoter_name=str(payload.get("promoterName") or "").strip(),
+        taluka="",
+        district="",
+        state=str(payload.get("projectLocationName") or "").strip(),
+        pincode="",
+        last_modified="",
+        listing_status=str(payload.get("projectStatusName") or "").strip(),
+        certificate_available=bool(certificate_date),
+        extension_certificate_available=bool(extension_name),
+        latitude=None,
+        longitude=None,
+        detail_url=detail_url,
+        original_application_url="",
+        source_page_url=detail_url,
+        project_type=str(payload.get("projectTypeName") or "").strip(),
+        registration_date=str(payload.get("reraRegistrationDate") or "")[:10],
+        proposed_completion_date=str(payload.get("projectProposeComplitionDate") or "")[:10],
+        record_source="public-view",
+    )
+
+
+def scrape_public_view(args: argparse.Namespace) -> dict:
+    """Small sample from the public project-view API on the IT portal.
+
+    Address, promoter, and district calls on that service return HTTP 401
+    without a session, so they are not called. District text is not in the
+    open general-details record.
+    """
+    if args.project_district:
+        raise ScraperError(
+            "The open public project-view record has no district field, so "
+            "--district cannot be applied on this path. Run without --district, "
+            "or use the HTML listing from a network that can open "
+            f"{BASE_URL}{LISTING_PATH}."
+        )
+    bundle = it_portal_ca_bundle()
+    session = requests.Session()
+    session.verify = bundle
+    session.headers.update(
+        {
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+    )
+    wanted = args.limit if args.limit is not None else args.max_pages * 10
+    max_attempts = max(wanted * 4, wanted)
+    collected: list[Project] = []
+    project_id = args.start_id
+    attempts = 0
+    last_request_at = 0.0
+    while len(collected) < wanted and attempts < max_attempts:
+        if last_request_at:
+            wait = args.delay - (time.monotonic() - last_request_at)
+            if wait > 0:
+                time.sleep(wait)
+        attempts += 1
+        try:
+            response = session.post(
+                PUBLIC_VIEW_URL,
+                json={"projectId": project_id},
+                timeout=args.timeout,
+            )
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            raise ScraperError(f"Public project view failed for id {project_id}: {exc}") from exc
+        last_request_at = time.monotonic()
+        if response.status_code == 401:
+            raise ScraperError(
+                "Public project view returned HTTP 401. This client does not log in."
+            )
+        project = None
+        if response.status_code == 200:
+            try:
+                body = response.json()
+            except ValueError:
+                body = {}
+            if str(body.get("status")) == "1":
+                project = project_from_public_view(body.get("responseObject") or {})
+        if project is not None:
+            collected.append(project)
+            print(
+                f"public view id {project_id}: {project.registration_number} {project.project_name}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"public view id {project_id}: no public project", file=sys.stderr)
+        project_id += 1
+    return {
+        "source": PUBLIC_VIEW_URL,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "filters": {
+            "project_name": args.project_name,
+            "project_state": args.project_state,
+            "start_id": args.start_id,
+            "limit": wanted,
+            "project_type": args.project_type,
+        },
+        "reported_total": None,
+        "reported_pages": None,
+        "pages_fetched": attempts,
+        "listing_status": "public-view",
+        "projects": [asdict(project) for project in collected],
+    }
+
+
 def filter_projects(projects: list[Project], district_label: str | None) -> list[Project]:
     if not district_label:
         return projects
@@ -504,7 +710,7 @@ def filter_projects(projects: list[Project], district_label: str | None) -> list
     return [project for project in projects if project.district.casefold() == wanted]
 
 
-def scrape(args: argparse.Namespace) -> dict:
+def scrape_listing(args: argparse.Namespace) -> dict:
     client = Client(
         delay=args.delay,
         retries=args.retries,
@@ -596,6 +802,28 @@ def scrape(args: argparse.Namespace) -> dict:
     }
 
 
+def scrape(args: argparse.Namespace) -> dict:
+    if args.source == "public-view":
+        return scrape_public_view(args)
+    listing_args = args
+    if args.source == "auto":
+        listing_args = copy.copy(args)
+        listing_args.retries = 0
+        listing_args.timeout = min(12.0, args.timeout)
+    try:
+        return scrape_listing(listing_args)
+    except ScraperError as exc:
+        if args.source == "auto" and _transport_failure(exc):
+            print(
+                "warning: the HTML listing host did not finish a connection "
+                f"({exc}). Reading a small sample from the public project-view API "
+                f"on {IT_ORIGIN} instead.",
+                file=sys.stderr,
+            )
+            return scrape_public_view(args)
+        raise
+
+
 def write_outputs(payload: dict, csv_path: str | None, json_path: str | None) -> None:
     projects = payload["projects"]
     if json_path:
@@ -669,6 +897,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retries", type=int, default=3, help="Retries for timeout, connection errors, and HTTP 429/5xx. Default: 3.")
     parser.add_argument("--timeout", type=float, default=45.0, help="Per-request timeout in seconds. Default: 45.")
     parser.add_argument(
+        "--source",
+        choices=("auto", "listing", "public-view"),
+        default="auto",
+        help=(
+            "auto tries the HTML listing, then the public project-view API if that "
+            "host does not connect. listing stays on the HTML search. public-view "
+            "reads getProjectGeneralDetailsByProjectId only."
+        ),
+    )
+    parser.add_argument(
+        "--start-id",
+        type=int,
+        default=1,
+        help="First project id for --source public-view. Default: 1.",
+    )
+    parser.add_argument(
         "--proxy",
         default="",
         help=(
@@ -689,6 +933,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--max-pages must be at least 1")
     if args.start_page < 1:
         parser.error("--start-page must be at least 1")
+    if args.start_id < 1:
+        parser.error("--start-id must be at least 1")
     if args.delay < 0:
         parser.error("--delay must be >= 0")
     if args.limit is not None and args.limit < 1:

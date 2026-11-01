@@ -65,23 +65,39 @@ one page. A full registered list is tens of thousands of projects (the public
 page has shown on the order of 45,000–50,000 results, 10 per page), so a
 complete walk is thousands of requests. Keep the delay.
 
-## Where to run it
+## When the HTML listing host does not connect
 
-Run the sample on a network that can open the listing in a browser. No proxy
-is required there. This cloud VM can open TCP to `maharera.maharashtra.gov.in`
-(`103.180.31.13:443`) and then the TLS handshake stalls, so the script times
-out before any HTML arrives.
+`maharera.maharashtra.gov.in` is the paginated search. From this network, TCP
+to that host connects and the TLS handshake then stalls, so the HTML list
+never arrives.
 
-A forward proxy helps only when that proxy's own network completes TLS to the
-portal. Point `--proxy` or `HTTPS_PROXY` at a proxy you already operate:
+The same authority serves public project details on
+`maharerait.maharashtra.gov.in`. That host completes TLS. Its certificate
+chain omits the issuer named on the leaf, `GlobalSign GCC R46 OV TLS CA 2025`.
+The client downloads that intermediate from GlobalSign's published CA Issuers
+URL, checks that OpenSSL can chain it to a root already in the system store,
+and only then uses it. With that bundle, this call needs no login and returns
+one public project:
+
+`POST /api/maha-rera-public-view-project-registration-service/public/projectregistartion/getProjectGeneralDetailsByProjectId`
+
+Body: `{"projectId": 1}`
+
+`--source auto` (the default) tries the HTML list once. If that connection
+times out, it reads a short run of those public project ids instead
+(`--max-pages` pages worth, 10 ids of headroom per page, `--start-id` defaults
+to 1). Fees, document ids, and user profile ids in that response are not
+written out. Address, promoter, and district calls on the same service return
+HTTP 401, so they are not called, and `--district` cannot be applied on this
+fallback.
 
 ```bash
-python3 maharera_scraper/scrape_projects.py --max-pages 1 --proxy http://proxy.example:8080
+python3 maharera_scraper/scrape_projects.py --source public-view --limit 3
 ```
 
-There is no proxy configured in this environment. A proxy that uses the same
-blocked path fails the same way. The client keeps its identified User-Agent
-and the same public listing URL either way.
+A forward proxy you already operate is still available for the HTML list
+(`--proxy` or `HTTPS_PROXY`). It only helps when that proxy can finish TLS to
+`maharera.maharashtra.gov.in`.
 
 If the district dropdown cannot be read, a district **name** still filters the
 cards that were returned. A numeric `--project-district` is sent as the id

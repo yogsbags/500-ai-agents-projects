@@ -11,6 +11,7 @@ from scrape_projects import (
     match_option,
     parse_listing,
     parse_options,
+    project_from_public_view,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "listing_page.html"
@@ -100,6 +101,42 @@ class OptionTests(unittest.TestCase):
         ):
             self.assertIn(part, url)
         self.assertNotIn("project_type=", url)
+
+
+class PublicViewTests(unittest.TestCase):
+    def test_maps_open_general_details_and_drops_fees(self):
+        project = project_from_public_view(
+            {
+                "projectId": 1,
+                "projectName": "GREEN CITY 3",
+                "projectRegistartionNo": "P50500000005",
+                "projectStatusName": "Ongoing",
+                "projectTypeName": "Residential / Group Housing",
+                "projectLocationName": "Maharashtra",
+                "reraRegistrationDate": "2017-05-20",
+                "projectProposeComplitionDate": "2018-12-31",
+                "registrationCertificateGenerationDate": "2017-05-20",
+                "promoterName": None,
+                "projectFeesPayableAmount": 82072.1,
+                "userProfileId": 121110,
+                "registrationCertificateDmsRefNo": "do-not-keep",
+            }
+        )
+        self.assertIsNotNone(project)
+        self.assertEqual(project.registration_number, "P50500000005")
+        self.assertEqual(project.project_name, "GREEN CITY 3")
+        self.assertEqual(project.listing_status, "Ongoing")
+        self.assertEqual(project.state, "Maharashtra")
+        self.assertEqual(project.registration_date, "2017-05-20")
+        self.assertTrue(project.certificate_available)
+        self.assertEqual(project.district, "")
+        self.assertEqual(
+            project.detail_url,
+            "https://maharerait.maharashtra.gov.in/public/project/view/1",
+        )
+        self.assertNotIn("82072", str(project))
+        self.assertNotIn("do-not-keep", str(project))
+        self.assertNotIn("121110", str(project))
 
 
 class ProxyTests(unittest.TestCase):
