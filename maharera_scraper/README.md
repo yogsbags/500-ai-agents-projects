@@ -13,8 +13,11 @@ pager links are ordinary GET requests with the form's own parameter names
 `/div-district-data`. Those are the same calls the public search form makes.
 There is no public bulk-export file for this list.
 
-This tool does not log in, does not open certificate modals, and does not try
-to get past a CAPTCHA or an access check. `robots.txt` on the portal is the
+This tool does not open certificate modals, does not integrate third-party
+captcha-solving services, and does not automate CAPTCHA widgets. By default it
+enriches each project through the same public-view `authenticatePublic` call
+and detail APIs that the IT portal page uses after you open a project
+(no separate login account). `robots.txt` on the portal is the
 Drupal default: `/projects-search-result` is allowed; `/search/`, `/user/`, and
 `/admin/` are not, and this client does not request them.
 
@@ -88,11 +91,13 @@ times out, it reads a short run of those public project ids instead
 (`--max-pages` pages worth, `--start-id` defaults to 1). Fees, document ids,
 and user profile ids in that response are not written out.
 
-District does not need a login. On the older `P` + 11 digit registration
-numbers, the three digits after `P` are the district id (`P51700000002` is
-district 517). The public master-data call `getDistrictList` returns those
-names with no token. `--district Thane` keeps projects whose number maps to
-Thane. Promoter, taluka, and pincode are not in these open responses.
+District can come from the registration number plus the public `getDistrictList`
+call (no token). With the default `--enrich-details`, the client also calls
+`authenticatePublic` with the shared public-view credentials from the Angular
+bundle, then `getProjectLandAddressDetails` and
+`getProjectAndAssociatedPromoterDetails` for promoter, taluka, pincode, and
+district names. The public CAPTCHA on the page is not required for those API
+calls. Use `--no-enrich-details` to skip that step.
 
 ```bash
 python3 maharera_scraper/scrape_projects.py --source public-view --limit 3

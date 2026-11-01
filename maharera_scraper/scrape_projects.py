@@ -6,15 +6,18 @@ https://maharera.maharashtra.gov.in/projects-search-result
 Ten cards per page. The same page's search form loads division and district
 ids from two public GET endpoints. This client only calls those URLs.
 
-It does not log in, solve CAPTCHAs, or open certificate modals.
+It does not solve CAPTCHAs, use third-party captcha services, or open certificate modals.
+Optional enrichment uses the same public-view authenticatePublic call as the IT portal page.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import csv
 import json
+import os
 import re
 import subprocess
 import sys
@@ -27,6 +30,8 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from Crypto.Cipher import AES
+from Crypto.Hash import MD5
 
 BASE_URL = "https://maharera.maharashtra.gov.in"
 IT_ORIGIN = "https://maharerait.maharashtra.gov.in"
@@ -38,6 +43,15 @@ PUBLIC_VIEW_URL = (
     + "/public/projectregistartion/getProjectGeneralDetailsByProjectId"
 )
 DISTRICT_LIST_URL = IT_ORIGIN + "/api/maha-rera-mdm-service/mdm/getDistrictList"
+PUBLIC_VIEW_API_BASE = (
+    IT_ORIGIN
+    + "/api/maha-rera-public-view-project-registration-service/public/projectregistartion"
+)
+LOGIN_API_URL = IT_ORIGIN + "/api/maha-rera-login-service/login/authenticatePublic"
+# Same passphrase and credentials as the public project-view Angular bundle.
+PUBLIC_VIEW_ENCRYPT_PASSPHRASE = "sdjhfsdkjgkls74385385"
+PUBLIC_VIEW_USERNAME = "@maharera_public_view"
+PUBLIC_VIEW_PASSWORD = "Maharera!@$1"
 # AIA CA Issuers URL on the live maharerait certificate. The server sends a
 # different, older intermediate, so Python cannot build the chain until this
 # one is present. It chains to GlobalSign Root R46, which is in the system store.
@@ -582,6 +596,139 @@ def it_portal_ca_bundle() -> str:
     return bundle_path
 
 
+def _cryptojs_evp_bytes_to_key(
+    password: bytes, salt: bytes, key_len: int, iv_len: int
+) -> tuple[bytes, bytes]:
+    derived = b""
+    block = b""
+    while len(derived) < key_len + iv_len:
+        block = MD5.new(block + password + salt).digest()
+        derived += block
+    return derived[:key_len], derived[key_len : key_len + iv_len]
+
+
+def cryptojs_encrypt(plaintext: str, passphrase: str, *, salt: bytes | None = None) -> str:
+    """OpenSSL-compatible AES-256-CBC encryption (CryptoJS default format)."""
+    salt = salt if salt is not None else os.urandom(8)
+    key, iv = _cryptojs_evp_bytes_to_key(passphrase.encode("utf-8"), salt, 32, 16)
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    pad = 16 - (len(plaintext) % 16)
+    payload = plaintext.encode("utf-8") + bytes([pad]) * pad
+    ciphertext = cipher.encrypt(payload)
+    return base64.b64encode(b"Salted__" + salt + ciphertext).decode("ascii")
+
+
+def project_id_from_detail_url(url: str) -> int | None:
+    match = re.search(r"/public/project/view/(\d+)", url or "", re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def make_it_portal_session(*, verify: str, proxy: str | None = None) -> requests.Session:
+    session = requests.Session()
+    session.verify = verify
+    session.headers.update(
+        {
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Origin": IT_ORIGIN,
+        }
+    )
+    if proxy:
+        session.proxies.update({"http": proxy, "https": proxy})
+    return session
+
+
+def _it_portal_json(
+    session: requests.Session,
+    url: str,
+    payload: dict,
+    *,
+    timeout: float,
+) -> dict:
+    response = session.post(url, json=payload, timeout=timeout)
+    if response.status_code == 401:
+        raise ScraperError(f"HTTP 401 from {url}")
+    response.raise_for_status()
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise ScraperError(f"Non-JSON response from {url}") from exc
+    return body
+
+
+def authenticate_public_view(session: requests.Session, *, referer_project_id: int, timeout: float) -> None:
+    """Mint a bearer token with the shared public-view credentials from the IT portal."""
+    referer = f"{IT_ORIGIN}/public/project/view/{referer_project_id}"
+    session.headers["Referer"] = referer
+    session.get(referer, timeout=timeout)
+    body = {
+        "userName": cryptojs_encrypt(PUBLIC_VIEW_USERNAME, PUBLIC_VIEW_ENCRYPT_PASSPHRASE),
+        "password": cryptojs_encrypt(PUBLIC_VIEW_PASSWORD, PUBLIC_VIEW_ENCRYPT_PASSPHRASE),
+    }
+    auth = _it_portal_json(session, LOGIN_API_URL, body, timeout=timeout)
+    if str(auth.get("status")) != "1":
+        message = str(auth.get("message") or "authenticatePublic failed")
+        raise ScraperError(f"Public-view authentication failed: {message}")
+    token = (auth.get("responseObject") or {}).get("accessToken")
+    if not token:
+        raise ScraperError("Public-view authentication returned no access token")
+    session.headers["Authorization"] = f"Bearer {token}"
+
+
+def apply_public_view_enrichment(project: Project, *, land: dict | None, promoter: dict | None) -> None:
+    if land:
+        if land.get("districtName"):
+            project.district = str(land["districtName"]).strip()
+        if land.get("stateName"):
+            project.state = str(land["stateName"]).strip()
+        if land.get("talukaName"):
+            project.taluka = str(land["talukaName"]).strip()
+        pin = land.get("pinCode")
+        if pin not in (None, ""):
+            project.pincode = str(pin).strip()
+    if promoter:
+        name = promoter.get("promoterName")
+        if name:
+            project.promoter_name = str(name).strip()
+        if not project.taluka and promoter.get("talukaName"):
+            project.taluka = str(promoter["talukaName"]).strip()
+        if not project.district and promoter.get("districtName"):
+            project.district = str(promoter["districtName"]).strip()
+        if not project.state and promoter.get("stateName"):
+            project.state = str(promoter["stateName"]).strip()
+        if not project.pincode and promoter.get("pincode") not in (None, ""):
+            project.pincode = str(promoter["pincode"]).strip()
+
+
+def enrich_project_public_view(
+    session: requests.Session,
+    project: Project,
+    project_id: int,
+    *,
+    timeout: float,
+) -> None:
+    land_body = _it_portal_json(
+        session,
+        f"{PUBLIC_VIEW_API_BASE}/getProjectLandAddressDetails",
+        {"projectId": project_id},
+        timeout=timeout,
+    )
+    land = land_body.get("responseObject") if str(land_body.get("status")) == "1" else None
+    promoter_body = _it_portal_json(
+        session,
+        f"{PUBLIC_VIEW_API_BASE}/getProjectAndAssociatedPromoterDetails",
+        {"projectId": project_id},
+        timeout=timeout,
+    )
+    promoter = None
+    if str(promoter_body.get("status")) == "1":
+        promoter = (promoter_body.get("responseObject") or {}).get("promoterDetails")
+    apply_public_view_enrichment(project, land=land, promoter=promoter)
+
+
 def project_from_public_view(payload: dict) -> Project | None:
     """Map the public general-details object. Document ids and fees are left out."""
     if not payload:
@@ -667,21 +814,11 @@ def fetch_district_names(session: requests.Session, state_id: str, timeout: floa
 
 
 def scrape_public_view(args: argparse.Namespace) -> dict:
-    """Small sample from the public project-view API on the IT portal.
-
-    District comes from the registration number plus the public district list.
-    Promoter, taluka, and pincode are not in those open responses.
-    """
+    """Sample projects from the public project-view API on the IT portal."""
     bundle = it_portal_ca_bundle()
-    session = requests.Session()
-    session.verify = bundle
-    session.headers.update(
-        {
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            }
-        )
+    session = make_it_portal_session(verify=bundle, proxy=args.proxy or None)
+    if args.enrich_details:
+        authenticate_public_view(session, referer_project_id=args.start_id, timeout=args.timeout)
     districts_by_id = fetch_district_names(session, args.project_state, args.timeout)
     district_label = " ".join(args.project_district.split()) if args.project_district else ""
     wanted = args.limit if args.limit is not None else args.max_pages * 10
@@ -721,6 +858,23 @@ def scrape_public_view(args: argparse.Namespace) -> dict:
                 project = project_from_public_view(body.get("responseObject") or {})
         if project is not None:
             apply_registration_district(project, districts_by_id)
+            if args.enrich_details:
+                if last_request_at:
+                    wait = args.delay - (time.monotonic() - last_request_at)
+                    if wait > 0:
+                        time.sleep(wait)
+                try:
+                    enrich_project_public_view(
+                        session,
+                        project,
+                        project_id,
+                        timeout=args.timeout,
+                    )
+                except (requests.Timeout, requests.ConnectionError, ScraperError) as exc:
+                    raise ScraperError(
+                        f"Public-view enrichment failed for id {project_id}: {exc}"
+                    ) from exc
+                last_request_at = time.monotonic()
             if district_label and not filter_projects([project], district_label):
                 print(
                     f"public view id {project_id}: {project.registration_number} "
@@ -832,6 +986,30 @@ def scrape_listing(args: argparse.Namespace) -> dict:
 
     if args.limit is not None:
         collected = collected[: args.limit]
+
+    if args.enrich_details and collected:
+        bundle = it_portal_ca_bundle()
+        enrich_session = make_it_portal_session(verify=bundle, proxy=args.proxy or None)
+        first_id = project_id_from_detail_url(collected[0].detail_url) or 1
+        authenticate_public_view(
+            enrich_session, referer_project_id=first_id, timeout=args.timeout
+        )
+        last_enrich_at = 0.0
+        for project in collected:
+            project_id = project_id_from_detail_url(project.detail_url)
+            if project_id is None:
+                continue
+            if last_enrich_at:
+                wait = args.delay - (time.monotonic() - last_enrich_at)
+                if wait > 0:
+                    time.sleep(wait)
+            enrich_project_public_view(
+                enrich_session,
+                project,
+                project_id,
+                timeout=args.timeout,
+            )
+            last_enrich_at = time.monotonic()
 
     return {
         "source": f"{BASE_URL}{LISTING_PATH}",
@@ -956,8 +1134,25 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "auto tries the HTML listing, then the public project-view API if that "
             "host does not connect. listing stays on the HTML search. public-view "
-            "reads getProjectGeneralDetailsByProjectId only."
+            "reads getProjectGeneralDetailsByProjectId."
         ),
+    )
+    enrich = parser.add_mutually_exclusive_group()
+    enrich.add_argument(
+        "--enrich-details",
+        dest="enrich_details",
+        action="store_true",
+        default=True,
+        help=(
+            "After each project is found, call the IT portal public-view APIs for "
+            "land address and promoter (default: on)."
+        ),
+    )
+    enrich.add_argument(
+        "--no-enrich-details",
+        dest="enrich_details",
+        action="store_false",
+        help="Skip authenticatePublic and the land/promoter detail APIs.",
     )
     parser.add_argument(
         "--start-id",

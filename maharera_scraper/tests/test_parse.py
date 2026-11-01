@@ -6,14 +6,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scrape_projects import (
     Client,
+    apply_public_view_enrichment,
     apply_registration_district,
     build_listing_url,
+    cryptojs_encrypt,
     district_id_from_registration,
     filter_projects,
     match_option,
     parse_listing,
     parse_options,
     project_from_public_view,
+    project_id_from_detail_url,
+    PUBLIC_VIEW_ENCRYPT_PASSPHRASE,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "listing_page.html"
@@ -159,6 +163,50 @@ class PublicViewTests(unittest.TestCase):
             [row.registration_number for row in filter_projects([project], "thane")],
             ["P51700000002"],
         )
+
+
+class PublicViewEnrichmentTests(unittest.TestCase):
+    def test_cryptojs_matches_portal_passphrase(self):
+        ciphertext = cryptojs_encrypt(
+            "hello",
+            PUBLIC_VIEW_ENCRYPT_PASSPHRASE,
+            salt=b"01234567",
+        )
+        self.assertTrue(ciphertext.startswith("U2FsdGVkX1"))
+
+    def test_project_id_from_detail_url(self):
+        self.assertEqual(
+            project_id_from_detail_url(
+                "https://maharerait.maharashtra.gov.in/public/project/view/42?isOriginal=true"
+            ),
+            42,
+        )
+        self.assertIsNone(project_id_from_detail_url("https://example.com/"))
+
+    def test_apply_public_view_enrichment(self):
+        project = project_from_public_view(
+            {
+                "projectId": 3,
+                "projectName": "UNNATHI WOODS PHASE VII A",
+                "projectRegistartionNo": "P51700000002",
+            }
+        )
+        self.assertIsNotNone(project)
+        assert project is not None
+        apply_public_view_enrichment(
+            project,
+            land={
+                "districtName": "Thane",
+                "stateName": "MAHARASHTRA",
+                "talukaName": "Thane",
+                "pinCode": "400601",
+            },
+            promoter={"promoterName": "UNNATHI ESTATES"},
+        )
+        self.assertEqual(project.promoter_name, "UNNATHI ESTATES")
+        self.assertEqual(project.district, "Thane")
+        self.assertEqual(project.taluka, "Thane")
+        self.assertEqual(project.pincode, "400601")
 
 
 class ProxyTests(unittest.TestCase):
