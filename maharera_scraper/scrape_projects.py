@@ -1004,9 +1004,11 @@ def scrape_public_view(args: argparse.Namespace) -> dict:
     districts_by_id = fetch_district_names(session, args.project_state, args.timeout)
     district_label = " ".join(args.project_district.split()) if args.project_district else ""
     wanted = args.limit if args.limit is not None else args.max_pages * 10
-    max_attempts = wanted * (40 if district_label else 4)
+    # Sequential project ids are sparse; scan more ids when a district filter drops rows.
+    scan_multiplier = 50 if district_label else 10
+    default_scan = max(500 if district_label else 5000, wanted * scan_multiplier)
+    max_attempts = args.max_id_scan if args.max_id_scan is not None else default_scan
     max_attempts = max(max_attempts, wanted)
-    max_attempts = min(max_attempts, 60)
     collected: list[Project] = []
     project_id = args.start_id
     attempts = 0
@@ -1231,10 +1233,13 @@ def scrape(args: argparse.Namespace) -> dict:
         return scrape_listing(listing_args)
     except ScraperError as exc:
         if args.source == "auto" and _transport_failure(exc):
+            sample = args.limit if args.limit is not None else args.max_pages * 10
             print(
                 "warning: the HTML listing host did not finish a connection "
-                f"({exc}). Reading a small sample from the public project-view API "
-                f"on {IT_ORIGIN} instead.",
+                f"({exc}). Falling back to sequential public-view ids on {IT_ORIGIN} "
+                f"(about {sample} projects, not the full ~45k listing). For the "
+                "complete catalog, run with --source listing from a network that "
+                "reaches maharera.maharashtra.gov.in or use --proxy.",
                 file=sys.stderr,
             )
             return scrape_public_view(args)
@@ -1365,6 +1370,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="First project id for --source public-view. Default: 1.",
     )
     parser.add_argument(
+        "--max-id-scan",
+        type=int,
+        default=None,
+        help=(
+            "For --source public-view only: stop after this many sequential "
+            "projectId attempts (found or empty). Default: max(500, wanted×50) "
+            "with a district name filter, else max(5000, wanted×10)."
+        ),
+    )
+    parser.add_argument(
         "--proxy",
         default="",
         help=(
@@ -1387,6 +1402,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--start-page must be at least 1")
     if args.start_id < 1:
         parser.error("--start-id must be at least 1")
+    if args.max_id_scan is not None and args.max_id_scan < 1:
+        parser.error("--max-id-scan must be at least 1")
     if args.delay < 0:
         parser.error("--delay must be >= 0")
     if args.limit is not None and args.limit < 1:

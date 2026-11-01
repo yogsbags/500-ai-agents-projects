@@ -215,8 +215,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Where to discover candidates before screening.",
     )
-    parser.add_argument("--max-pages", type=int, default=2, help="Listing pages per district. Default: 2.")
-    parser.add_argument("--limit", type=int, default=20, help="Maximum projects to pull before screening.")
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=10,
+        help="Listing pages per district (10 projects per page). Default: 10.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum projects to pull before screening (across all districts). Default: 100.",
+    )
     parser.add_argument("--start-id", type=int, default=1, help="Public-view start id when --source public-view.")
     parser.add_argument("--project-state", default=sp.DEFAULT_STATE_CODE)
     parser.add_argument("--delay", type=float, default=1.5)

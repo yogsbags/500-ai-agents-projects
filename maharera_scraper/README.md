@@ -35,6 +35,43 @@ One page (10 cards), written to CSV and JSON in the current directory:
 python3 maharera_scraper/scrape_projects.py --max-pages 1
 ```
 
+## Scraping more than one project
+
+You only get **one row** when you pass **`--limit 1`** (we used that in smoke tests). Defaults otherwise:
+
+| Mode | Default yield | How to get “all” projects |
+| --- | --- | --- |
+| **`--source listing`** | `--max-pages 1` → **10** cards | Raise `--max-pages` (10 projects per page). The public list has on the order of **~45,000** registered projects (~4,500 pages). Example: `--max-pages 500` → up to 5,000 cards. |
+| **`--source auto`** (default) | Same as listing **if** `maharera.maharashtra.gov.in` connects | From this cloud network the HTML host often **times out**; `auto` then falls back to **public-view id scanning**, which is **not** a full export unless you raise `--limit` / `--max-id-scan`. |
+| **`--source public-view`** | `--max-pages 1` and no `--limit` → **10** ids found | Walks sequential `projectId` values. Use `--limit 500 --max-id-scan 50000` (and `--district Thane` to target Konkan). Still slower and less complete than the HTML pager. |
+
+**Bulk Konkan pull (recommended when you have India egress or a proxy):**
+
+```bash
+export HTTPS_PROXY=http://your-india-proxy:8080   # if needed
+
+for d in "Mumbai City" "Mumbai Suburban" "Thane"; do
+  python3 maharera_scraper/scrape_projects.py \
+    --source listing \
+    --project-division Konkan \
+    --district "$d" \
+    --max-pages 200 \
+    --no-full-details \
+    --csv "maharera-${d// /-}.csv" \
+    --json "maharera-${d// /-}.json"
+done
+```
+
+**Full detail enrichment** (`--full-details`, default on) runs **30+ API calls per project** — use it on a `--limit` batch or after you have registration numbers from a cheap listing pass.
+
+```bash
+python3 maharera_scraper/scrape_projects.py \
+  --source listing \
+  --district Thane \
+  --max-pages 50 \
+  --limit 100
+```
+
 District name. The client asks the public dropdowns for the matching
 `project_district` id, sends that id, and also keeps only cards whose District
 text matches:

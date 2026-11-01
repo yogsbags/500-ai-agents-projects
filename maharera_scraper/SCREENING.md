@@ -33,7 +33,8 @@ python3 -m pip install -r maharera_scraper/requirements.txt
 python3 maharera_scraper/screen_projects.py \
   --source auto \
   --max-pages 2 \
-  --limit 15 \
+  --limit 100 \
+  --max-pages 20 \
   --registered-within-days 90 \
   --min-score 40
 
