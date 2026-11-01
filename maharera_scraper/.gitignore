@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+sample.csv
+sample.json
+maharera-projects.csv
+maharera-projects.json
