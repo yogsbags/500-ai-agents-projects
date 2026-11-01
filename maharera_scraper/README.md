@@ -155,3 +155,11 @@ python3 -m unittest discover -s maharera_scraper/tests -v
 ```
 
 Run that from the repository root. The test module adds `maharera_scraper/` to its import path.
+
+## Konkan ₹500 Cr+ screening checklist
+
+For PE / Category II AIF origination triage (Konkan division, Mumbai + Thane guardrails, built-up / land-cost / lender void scoring), see [SCREENING.md](SCREENING.md) and run:
+
+```bash
+python3 maharera_scraper/screen_projects.py --source auto --limit 15 --registered-within-days 90
+```

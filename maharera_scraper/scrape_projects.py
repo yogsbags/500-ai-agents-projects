@@ -33,7 +33,10 @@ from bs4 import BeautifulSoup
 from Crypto.Cipher import AES
 from Crypto.Hash import MD5
 
-from public_view_endpoints import PUBLIC_VIEW_DETAIL_CALLS
+try:
+    from public_view_endpoints import PUBLIC_VIEW_DETAIL_CALLS
+except ModuleNotFoundError:  # pragma: no cover - package import from repo root
+    from maharera_scraper.public_view_endpoints import PUBLIC_VIEW_DETAIL_CALLS
 
 BASE_URL = "https://maharera.maharashtra.gov.in"
 IT_ORIGIN = "https://maharerait.maharashtra.gov.in"
