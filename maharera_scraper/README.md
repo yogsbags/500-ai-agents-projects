@@ -85,11 +85,14 @@ Body: `{"projectId": 1}`
 
 `--source auto` (the default) tries the HTML list once. If that connection
 times out, it reads a short run of those public project ids instead
-(`--max-pages` pages worth, 10 ids of headroom per page, `--start-id` defaults
-to 1). Fees, document ids, and user profile ids in that response are not
-written out. Address, promoter, and district calls on the same service return
-HTTP 401, so they are not called, and `--district` cannot be applied on this
-fallback.
+(`--max-pages` pages worth, `--start-id` defaults to 1). Fees, document ids,
+and user profile ids in that response are not written out.
+
+District does not need a login. On the older `P` + 11 digit registration
+numbers, the three digits after `P` are the district id (`P51700000002` is
+district 517). The public master-data call `getDistrictList` returns those
+names with no token. `--district Thane` keeps projects whose number maps to
+Thane. Promoter, taluka, and pincode are not in these open responses.
 
 ```bash
 python3 maharera_scraper/scrape_projects.py --source public-view --limit 3

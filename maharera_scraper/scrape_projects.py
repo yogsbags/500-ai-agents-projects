@@ -37,6 +37,7 @@ PUBLIC_VIEW_URL = (
     + "/api/maha-rera-public-view-project-registration-service"
     + "/public/projectregistartion/getProjectGeneralDetailsByProjectId"
 )
+DISTRICT_LIST_URL = IT_ORIGIN + "/api/maha-rera-mdm-service/mdm/getDistrictList"
 # AIA CA Issuers URL on the live maharerait certificate. The server sends a
 # different, older intermediate, so Python cannot build the chain until this
 # one is present. It chains to GlobalSign Root R46, which is in the system store.
@@ -619,20 +620,58 @@ def project_from_public_view(payload: dict) -> Project | None:
     )
 
 
+def district_id_from_registration(registration_number: str) -> int | None:
+    """Older MahaRERA numbers are P + a 3-digit district id + 8 digits.
+
+    P51700000002 is district id 517. Newer PR/PM/PC/PP numbers do not use this.
+    """
+    match = re.fullmatch(r"P(\d{3})\d{8}", (registration_number or "").strip(), re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def apply_registration_district(project: Project, districts_by_id: dict[int, str]) -> None:
+    if project.district:
+        return
+    district_id = district_id_from_registration(project.registration_number)
+    if district_id is None:
+        return
+    name = districts_by_id.get(district_id)
+    if name:
+        project.district = name
+
+
+def fetch_district_names(session: requests.Session, state_id: str, timeout: float) -> dict[int, str]:
+    response = session.post(
+        DISTRICT_LIST_URL,
+        json={"stateId": int(state_id)},
+        timeout=timeout,
+    )
+    if response.status_code == 401:
+        raise ScraperError("Public district list returned HTTP 401.")
+    response.raise_for_status()
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise ScraperError("Public district list was not JSON") from exc
+    names: dict[int, str] = {}
+    for row in body.get("responseObject") or []:
+        try:
+            names[int(row["districtId"])] = str(row["districtName"]).strip()
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not names:
+        raise ScraperError("Public district list was empty")
+    return names
+
+
 def scrape_public_view(args: argparse.Namespace) -> dict:
     """Small sample from the public project-view API on the IT portal.
 
-    Address, promoter, and district calls on that service return HTTP 401
-    without a session, so they are not called. District text is not in the
-    open general-details record.
+    District comes from the registration number plus the public district list.
+    Promoter, taluka, and pincode are not in those open responses.
     """
-    if args.project_district:
-        raise ScraperError(
-            "The open public project-view record has no district field, so "
-            "--district cannot be applied on this path. Run without --district, "
-            "or use the HTML listing from a network that can open "
-            f"{BASE_URL}{LISTING_PATH}."
-        )
     bundle = it_portal_ca_bundle()
     session = requests.Session()
     session.verify = bundle
@@ -641,10 +680,14 @@ def scrape_public_view(args: argparse.Namespace) -> dict:
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
             "Content-Type": "application/json",
-        }
-    )
+            }
+        )
+    districts_by_id = fetch_district_names(session, args.project_state, args.timeout)
+    district_label = " ".join(args.project_district.split()) if args.project_district else ""
     wanted = args.limit if args.limit is not None else args.max_pages * 10
-    max_attempts = max(wanted * 4, wanted)
+    max_attempts = wanted * (40 if district_label else 4)
+    max_attempts = max(max_attempts, wanted)
+    max_attempts = min(max_attempts, 60)
     collected: list[Project] = []
     project_id = args.start_id
     attempts = 0
@@ -677,11 +720,20 @@ def scrape_public_view(args: argparse.Namespace) -> dict:
             if str(body.get("status")) == "1":
                 project = project_from_public_view(body.get("responseObject") or {})
         if project is not None:
-            collected.append(project)
-            print(
-                f"public view id {project_id}: {project.registration_number} {project.project_name}",
-                file=sys.stderr,
-            )
+            apply_registration_district(project, districts_by_id)
+            if district_label and not filter_projects([project], district_label):
+                print(
+                    f"public view id {project_id}: {project.registration_number} "
+                    f"{project.district or 'unknown district'}",
+                    file=sys.stderr,
+                )
+            else:
+                collected.append(project)
+                print(
+                    f"public view id {project_id}: {project.registration_number} "
+                    f"{project.project_name} ({project.district or 'no district'})",
+                    file=sys.stderr,
+                )
         else:
             print(f"public view id {project_id}: no public project", file=sys.stderr)
         project_id += 1
@@ -693,6 +745,7 @@ def scrape_public_view(args: argparse.Namespace) -> dict:
             "project_state": args.project_state,
             "start_id": args.start_id,
             "limit": wanted,
+            "district_name": district_label,
             "project_type": args.project_type,
         },
         "reported_total": None,

@@ -6,7 +6,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scrape_projects import (
     Client,
+    apply_registration_district,
     build_listing_url,
+    district_id_from_registration,
     filter_projects,
     match_option,
     parse_listing,
@@ -137,6 +139,26 @@ class PublicViewTests(unittest.TestCase):
         self.assertNotIn("82072", str(project))
         self.assertNotIn("do-not-keep", str(project))
         self.assertNotIn("121110", str(project))
+
+    def test_registration_number_carries_the_district_id(self):
+        self.assertEqual(district_id_from_registration("P51700000002"), 517)
+        self.assertEqual(district_id_from_registration("p50500000005"), 505)
+        self.assertIsNone(district_id_from_registration("PR1260002602339"))
+        project = project_from_public_view(
+            {
+                "projectId": 3,
+                "projectName": "UNNATHI WOODS PHASE VII A",
+                "projectRegistartionNo": "P51700000002",
+            }
+        )
+        self.assertIsNotNone(project)
+        assert project is not None
+        apply_registration_district(project, {517: "Thane", 505: "Nagpur"})
+        self.assertEqual(project.district, "Thane")
+        self.assertEqual(
+            [row.registration_number for row in filter_projects([project], "thane")],
+            ["P51700000002"],
+        )
 
 
 class ProxyTests(unittest.TestCase):
