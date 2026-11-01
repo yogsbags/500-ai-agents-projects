@@ -5,6 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scrape_projects import (
+    Client,
     build_listing_url,
     filter_projects,
     match_option,
@@ -99,6 +100,13 @@ class OptionTests(unittest.TestCase):
         ):
             self.assertIn(part, url)
         self.assertNotIn("project_type=", url)
+
+
+class ProxyTests(unittest.TestCase):
+    def test_proxy_flag_is_applied_to_the_session(self):
+        client = Client(delay=0, retries=0, timeout=1, proxy="http://127.0.0.1:9")
+        self.assertEqual(client.session.proxies["https"], "http://127.0.0.1:9")
+        self.assertEqual(client.session.proxies["http"], "http://127.0.0.1:9")
 
 
 if __name__ == "__main__":

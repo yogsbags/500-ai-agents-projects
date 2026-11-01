@@ -307,7 +307,14 @@ def build_listing_url(**kwargs) -> str:
 
 
 class Client:
-    def __init__(self, *, delay: float, retries: int, timeout: float) -> None:
+    def __init__(
+        self,
+        *,
+        delay: float,
+        retries: int,
+        timeout: float,
+        proxy: str | None = None,
+    ) -> None:
         self.delay = delay
         self.retries = retries
         self.timeout = timeout
@@ -319,6 +326,11 @@ class Client:
                 "Accept-Language": "en",
             }
         )
+        # A forward proxy the operator already runs. The session also honors
+        # HTTPS_PROXY from the environment. This is ordinary egress, not a
+        # second host or a rotated address pool.
+        if proxy:
+            self.session.proxies.update({"http": proxy, "https": proxy})
         self._last_request_at = 0.0
 
     def _pause(self) -> None:
@@ -493,7 +505,12 @@ def filter_projects(projects: list[Project], district_label: str | None) -> list
 
 
 def scrape(args: argparse.Namespace) -> dict:
-    client = Client(delay=args.delay, retries=args.retries, timeout=args.timeout)
+    client = Client(
+        delay=args.delay,
+        retries=args.retries,
+        timeout=args.timeout,
+        proxy=args.proxy or None,
+    )
     project_type = None
     if args.project_type == "revoked":
         project_type = "1"
@@ -651,6 +668,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delay", type=float, default=1.5, help="Seconds between requests. Default: 1.5.")
     parser.add_argument("--retries", type=int, default=3, help="Retries for timeout, connection errors, and HTTP 429/5xx. Default: 3.")
     parser.add_argument("--timeout", type=float, default=45.0, help="Per-request timeout in seconds. Default: 45.")
+    parser.add_argument(
+        "--proxy",
+        default="",
+        help=(
+            "Forward proxy URL for both HTTP and HTTPS, for example "
+            "http://proxy.example:8080. When omitted, HTTPS_PROXY in the "
+            "environment is used. The proxy must be one you operate."
+        ),
+    )
     parser.add_argument("--csv", default="maharera-projects.csv", help="CSV output path. Use - to skip.")
     parser.add_argument("--json", dest="json_path", default="maharera-projects.json", help="JSON output path. Use - to skip.")
     return parser

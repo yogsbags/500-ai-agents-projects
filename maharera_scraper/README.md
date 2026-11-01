@@ -65,6 +65,24 @@ one page. A full registered list is tens of thousands of projects (the public
 page has shown on the order of 45,000–50,000 results, 10 per page), so a
 complete walk is thousands of requests. Keep the delay.
 
+## Where to run it
+
+Run the sample on a network that can open the listing in a browser. No proxy
+is required there. This cloud VM can open TCP to `maharera.maharashtra.gov.in`
+(`103.180.31.13:443`) and then the TLS handshake stalls, so the script times
+out before any HTML arrives.
+
+A forward proxy helps only when that proxy's own network completes TLS to the
+portal. Point `--proxy` or `HTTPS_PROXY` at a proxy you already operate:
+
+```bash
+python3 maharera_scraper/scrape_projects.py --max-pages 1 --proxy http://proxy.example:8080
+```
+
+There is no proxy configured in this environment. A proxy that uses the same
+blocked path fails the same way. The client keeps its identified User-Agent
+and the same public listing URL either way.
+
 If the district dropdown cannot be read, a district **name** still filters the
 cards that were returned. A numeric `--project-district` is sent as the id
 with no name lookup.
@@ -102,7 +120,7 @@ JSON output wraps the rows with `source`, `fetched_at`, the filters actually sen
 
   `HTTPSConnectionPool(host='maharera.maharashtra.gov.in', port=443): Read timed out.`
 
-  The client does not switch hosts or use a proxy. A fetch of the same public URL from another network on 1 Nov 2026 returned the live first page: GREEN CITY 3, promoter GREEN SPACE INFRA VENTURES, taluka Nagpur (Rural), district Nagpur, pincode 441108, last modified 2017-05-20, then the same following cards the public list has shown (UNNATHI WOODS PHASE VII A, MAYFAIR VISHWARAJA, and so on). Offline parsing of that card markup is what the unit tests cover:
+  The client stays on that public URL. A fetch of the same URL from another network on 1 Nov 2026 returned the live first page: GREEN CITY 3, promoter GREEN SPACE INFRA VENTURES, taluka Nagpur (Rural), district Nagpur, pincode 441108, last modified 2017-05-20, then the same following cards the public list has shown (UNNATHI WOODS PHASE VII A, MAYFAIR VISHWARAJA, and so on). Offline parsing of that card markup is what the unit tests cover:
 
 ```bash
 python3 -m unittest discover -s maharera_scraper/tests -v
