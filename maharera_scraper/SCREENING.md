@@ -14,11 +14,24 @@ This pipeline is tuned for **Eka Life’s first Category II AIF (PERE)** use cas
 | **Fresh registrations** | `--registered-within-days 30`–`90` — teams still freezing equity/debt mix |
 | **Product fit** | Residential / mixed — avoids pure commercial shells |
 
-**Suggested outreach tiers (from `pe_aif_opportunity_score`):**
+**`eka_tier` (primary sort key):**
 
-- **≥ 70** — Phase 3 financial trigger **and** Phase 5 capital void; prioritize partner review.
-- **40–69** — Partial fit (scale *or* void *or* SRA complexity); analyst pass on Form 3 / encumbrance UI.
-- **&lt; 40** — Deprioritize unless strategic relationship.
+| Tier | Rule |
+| --- | --- |
+| **A** | Phase 1 + Phase 3 + Phase 5, score ≥ 70, `estimated_equity_gap_cr` ≥ `--min-infusion-crore` (default ₹500 Cr) |
+| **B** | Phase 1 + (Phase 3 or Phase 5), score ≥ 40 |
+| **C** | Some checklist signal, score &gt; 0 |
+| **—** | Outside Konkan guardrail or no signal |
+
+**`estimated_equity_gap_cr`** (heuristic, not a term sheet):
+
+`land_premium_cost_cr + 25% × (total_project_cost_cr − land_premium_cost_cr)`
+
+Land/premium is treated as **100% equity** (non-bankable); construction carries a **25%** promoter-equity placeholder until construction finance is in place.
+
+**`eka_fund_fit`** — `true` when Phase 1 + Phase 3 and equity gap ≥ ₹500 Cr (Eka’s minimum infusion conversation size).
+
+Legacy **`pe_aif_opportunity_score`** (0–100) remains for backward compatibility; CSV/JSON sort by **`eka_tier`** first.
 
 Automated output is **triage only**. Eka Life IC / legal still needs promoter diligence, title, encumbrance certificates, and confirmation that equity is actually sought at the project SPV level.
 
@@ -52,11 +65,11 @@ python3 -m pip install -r maharera_scraper/requirements.txt
 # Konkan districts via listing (falls back to public-view in --source auto)
 python3 maharera_scraper/screen_projects.py \
   --source auto \
-  --max-pages 2 \
-  --limit 100 \
   --max-pages 20 \
+  --limit 100 \
   --registered-within-days 90 \
-  --min-score 40
+  --min-score 60 \
+  --min-project-cost-crore 500
 
 # Direct public-view sample (when HTML listing host times out)
 python3 maharera_scraper/screen_projects.py \

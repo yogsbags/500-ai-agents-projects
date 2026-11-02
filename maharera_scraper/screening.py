@@ -26,11 +26,18 @@ RESIDENTIAL_TYPE_KEYWORDS = (
 )
 
 
+# Share of construction cost often funded as promoter/project equity before CF (heuristic).
+PROMOTER_CONSTRUCTION_EQUITY_SHARE = 0.25
+
+EKA_TIER_ORDER = {"A": 3, "B": 2, "C": 1, "—": 0}
+
+
 @dataclass(frozen=True)
 class ScreeningThresholds:
     min_built_up_sqft: float = 650_000.0
     min_implied_project_cost_crore: float = 500.0
     min_land_premium_cost_crore: float = 150.0
+    min_infusion_crore: float = 500.0
     mumbai_min_plot_sqm: float = 10_000.0
     thane_min_plot_sqm: float = 40_000.0
     min_sanctioned_buildings: int = 3
@@ -73,6 +80,11 @@ class ScreeningResult:
     phase4_sra_transit_trigger: bool
     phase5_capital_void_signal: bool
     pe_aif_opportunity_score: int
+    total_project_cost_cr: float | None = None
+    land_premium_cost_cr: float | None = None
+    estimated_equity_gap_cr: float | None = None
+    eka_tier: str = "—"
+    eka_fund_fit: bool = False
     signals: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -82,6 +94,11 @@ class ScreeningResult:
             "project_name": self.project_name,
             "project_id": self.project_id,
             "detail_url": self.detail_url,
+            "eka_tier": self.eka_tier,
+            "eka_fund_fit": self.eka_fund_fit,
+            "total_project_cost_cr": self.total_project_cost_cr,
+            "land_premium_cost_cr": self.land_premium_cost_cr,
+            "estimated_equity_gap_cr": self.estimated_equity_gap_cr,
             "phase1_eligible": self.phase1_eligible,
             "phase2_physical_trigger": self.phase2_physical_trigger,
             "phase3_financial_trigger": self.phase3_financial_trigger,
@@ -224,6 +241,39 @@ def extract_metrics(project_row: dict[str, Any], api_details: dict[str, Any] | N
     return metrics
 
 
+def estimate_equity_gap_inr(metrics: ScreeningMetrics) -> float | None:
+    """Heuristic equity pool: 100% of land/premium (non-bankable) + 25% of construction."""
+    total = metrics.total_estimated_project_cost_inr or metrics.implied_project_cost_inr
+    land = metrics.land_subtotal_inr
+    if total is None and land is None:
+        return None
+    total_val = float(total or 0)
+    land_val = float(land or 0)
+    construction = max(0.0, total_val - land_val)
+    return land_val + PROMOTER_CONSTRUCTION_EQUITY_SHARE * construction
+
+
+def assign_eka_tier(
+    *,
+    phase1: bool,
+    phase3: bool,
+    phase5: bool,
+    score: int,
+    equity_gap_cr: float | None,
+    min_infusion_crore: float,
+) -> str:
+    if not phase1:
+        return "—"
+    gap = equity_gap_cr or 0.0
+    if phase3 and phase5 and gap >= min_infusion_crore and score >= 70:
+        return "A"
+    if (phase3 or phase5) and score >= 40:
+        return "B"
+    if score > 0:
+        return "C"
+    return "—"
+
+
 def score_project(
     project_row: dict[str, Any],
     api_details: dict[str, Any] | None,
@@ -325,6 +375,33 @@ def score_project(
         if flag
     )
 
+    best_total_cr = max(reported_total_cr, implied_cr, 0.0)
+    if best_total_cr <= 0 and metrics.total_estimated_project_cost_inr:
+        best_total_cr = metrics.total_estimated_project_cost_inr / CRORE
+    equity_gap_inr = estimate_equity_gap_inr(metrics)
+    equity_gap_cr = (equity_gap_inr / CRORE) if equity_gap_inr is not None else None
+    eka_tier = assign_eka_tier(
+        phase1=phase1,
+        phase3=phase3,
+        phase5=phase5,
+        score=score,
+        equity_gap_cr=equity_gap_cr,
+        min_infusion_crore=thresholds.min_infusion_crore,
+    )
+    eka_fund_fit = bool(
+        phase1
+        and phase3
+        and equity_gap_cr is not None
+        and equity_gap_cr >= thresholds.min_infusion_crore
+    )
+    if eka_fund_fit:
+        signals.append(
+            f"Eka Life fund fit: estimated equity gap ≥ ₹{thresholds.min_infusion_crore:.0f} Cr "
+            f"(~₹{equity_gap_cr:.1f} Cr)"
+        )
+    if eka_tier == "A":
+        signals.append("Eka tier A: ≥₹500 Cr scale, capital void, Konkan + product fit")
+
     return ScreeningResult(
         registration_number=str(project_row.get("registration_number") or ""),
         project_name=str(project_row.get("project_name") or ""),
@@ -337,6 +414,11 @@ def score_project(
         phase4_sra_transit_trigger=phase4,
         phase5_capital_void_signal=phase5,
         pe_aif_opportunity_score=score,
+        total_project_cost_cr=round(best_total_cr, 2) if best_total_cr else None,
+        land_premium_cost_cr=round(land_cr, 2) if land_cr else None,
+        estimated_equity_gap_cr=round(equity_gap_cr, 2) if equity_gap_cr is not None else None,
+        eka_tier=eka_tier,
+        eka_fund_fit=eka_fund_fit,
         signals=signals,
         warnings=warnings,
     )
@@ -346,9 +428,10 @@ def rank_results(results: Iterable[ScreeningResult]) -> list[ScreeningResult]:
     return sorted(
         results,
         key=lambda item: (
+            EKA_TIER_ORDER.get(item.eka_tier, 0),
             item.pe_aif_opportunity_score,
+            item.estimated_equity_gap_cr or 0,
             item.metrics.total_estimated_project_cost_inr or 0,
-            item.metrics.total_built_up_sqft or 0,
         ),
         reverse=True,
     )

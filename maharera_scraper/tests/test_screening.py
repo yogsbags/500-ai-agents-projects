@@ -51,17 +51,19 @@ class ScreeningTests(unittest.TestCase):
                 "financeEstimatedActualCost": [
                     {
                         "fieldName": "Sub-total of land costs",
-                        "estimatedCost": 1600000000,
+                        "estimatedCost": 4_000_000_000,
                     },
                     {
                         "fieldName": "Total Cost of Project(Estimated)",
-                        "estimatedCost": 6200000000,
+                        "estimatedCost": 20_000_000_000,
                     },
                 ]
             },
             "finance_bank_details": [],
             "litigation": [],
             "building_wing_rehab": [{"rehab": True}],
+            "finance_bank_details": [],
+            "litigation": [],
         }
         metrics = extract_metrics(project, api_details)
         self.assertGreater(metrics.total_built_up_sqft or 0, 650_000)
@@ -74,6 +76,9 @@ class ScreeningTests(unittest.TestCase):
         self.assertTrue(result.phase3_financial_trigger)
         self.assertTrue(result.phase5_capital_void_signal)
         self.assertGreaterEqual(result.pe_aif_opportunity_score, 70)
+        self.assertTrue(result.eka_fund_fit)
+        self.assertEqual(result.eka_tier, "A")
+        self.assertGreater(result.estimated_equity_gap_cr or 0, 500)
 
 
 if __name__ == "__main__":

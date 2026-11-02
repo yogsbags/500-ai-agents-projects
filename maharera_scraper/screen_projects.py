@@ -33,6 +33,11 @@ SCREENING_CSV_FIELDS = [
     "project_name",
     "project_id",
     "detail_url",
+    "eka_tier",
+    "eka_fund_fit",
+    "estimated_equity_gap_cr",
+    "total_project_cost_cr",
+    "land_premium_cost_cr",
     "pe_aif_opportunity_score",
     "phase1_eligible",
     "phase2_physical_trigger",
@@ -142,6 +147,7 @@ def screen_payload(projects: list[dict], args: argparse.Namespace) -> dict:
         min_built_up_sqft=args.min_built_up_sqft,
         min_land_premium_cost_crore=args.min_land_premium_cost_crore,
         min_implied_project_cost_crore=args.min_project_cost_crore,
+        min_infusion_crore=args.min_infusion_crore,
         mumbai_min_plot_sqm=args.mumbai_min_plot_sqm,
         thane_min_plot_sqm=args.thane_min_plot_sqm,
         min_sanctioned_buildings=args.min_buildings,
@@ -260,6 +266,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-score", type=int, default=40, help="Only keep rows at/above this score.")
     parser.add_argument("--min-built-up-sqft", type=float, default=650_000.0)
     parser.add_argument("--min-project-cost-crore", type=float, default=500.0)
+    parser.add_argument(
+        "--min-infusion-crore",
+        type=float,
+        default=500.0,
+        help="Minimum estimated equity gap (₹ Cr) for eka_fund_fit and tier A. Default: 500.",
+    )
     parser.add_argument("--min-land-premium-cost-crore", type=float, default=150.0)
     parser.add_argument("--mumbai-min-plot-sqm", type=float, default=10_000.0)
     parser.add_argument("--thane-min-plot-sqm", type=float, default=40_000.0)
