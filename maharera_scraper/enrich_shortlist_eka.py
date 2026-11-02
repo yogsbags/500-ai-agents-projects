@@ -153,10 +153,19 @@ def full_enrich_projects_fixed(
                 requests.ConnectionError,
                 requests.HTTPError,
             ) as exc:
+                reauth = False
                 if isinstance(exc, requests.HTTPError):
                     status = exc.response.status_code if exc.response is not None else 0
-                    if status not in {429, 500, 502, 503, 504}:
+                    if status == 401:
+                        reauth = True
+                    elif status not in {429, 500, 502, 503, 504}:
                         raise
+                elif isinstance(exc, sp.ScraperError) and "401" in str(exc):
+                    reauth = True
+                if reauth:
+                    sp.authenticate_public_view(
+                        session, referer_project_id=project_id, timeout=timeout
+                    )
                 last_error = exc
                 if attempt >= retries:
                     print(f"failed id {project_id} after {retries + 1} attempts: {exc}", file=sys.stderr)
