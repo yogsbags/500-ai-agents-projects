@@ -35,6 +35,21 @@ def resecreen_file(
     return payload
 
 
+def merge_scrape_jsons(sources: list[Path], dest: Path) -> int:
+    merged: list[dict] = []
+    for path in sources:
+        if not path.is_file():
+            continue
+        merged.extend(json.loads(path.read_text(encoding="utf-8")).get("projects") or [])
+    if not merged:
+        return 0
+    dest.write_text(
+        json.dumps({"projects": merged, "merged_from": [str(p) for p in sources]}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return len(merged)
+
+
 def merge_csvs(sources: list[Path], dest: Path) -> int:
     rows: list[dict] = []
     for path in sources:
