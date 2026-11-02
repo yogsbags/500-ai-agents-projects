@@ -79,7 +79,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Re-screen scrape JSON with Eka tier fields.")
     parser.add_argument("json_files", nargs="+", help="Paths to maharera-* scrape JSON files")
     parser.add_argument("--csv-prefix", default="/opt/cursor/artifacts/eka-rescreen")
-    parser.add_argument("--merge-csv", default="/opt/cursor/artifacts/eka-konkan-combined-screening.csv")
+    parser.add_argument(
+        "--merge-csv",
+        default="",
+        help="Optional: merge per-file CSV outputs into this path (overwrites).",
+    )
     parser.add_argument(
         "--merge-scrape-json",
         default="",
