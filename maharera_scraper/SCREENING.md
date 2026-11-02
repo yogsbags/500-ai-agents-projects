@@ -2,6 +2,26 @@
 
 Operationalizes the five-phase checklist for **early-stage, project-level equity** opportunities on MahaRERA.
 
+## Eka Life — maiden Category II PERE mandate
+
+This pipeline is tuned for **Eka Life’s first Category II AIF (PERE)** use case: find Maharashtra developers who need **project-level equity** at **₹500 crore+ scale**, not small ticket lending or late-stage construction finance.
+
+| Fund lens | What the screener approximates |
+| --- | --- |
+| **Ticket size (≥ ₹500 Cr)** | Phase 3: total estimated project cost, implied cost from built-up × ₹8,000/sq ft, or land/premium sub-total ≥ ₹150 Cr (Form 3–style gap where bank debt cannot fund land/FSI) |
+| **Early capital structure** | Phase 5: no listed lenders/mortgages on the public RERA finance tab — registration done, **construction finance not yet attached** |
+| **Konkan origination focus** | Phase 1: Konkan division guardrail — Mumbai City, Mumbai Suburban, Thane |
+| **Fresh registrations** | `--registered-within-days 30`–`90` — teams still freezing equity/debt mix |
+| **Product fit** | Residential / mixed — avoids pure commercial shells |
+
+**Suggested outreach tiers (from `pe_aif_opportunity_score`):**
+
+- **≥ 70** — Phase 3 financial trigger **and** Phase 5 capital void; prioritize partner review.
+- **40–69** — Partial fit (scale *or* void *or* SRA complexity); analyst pass on Form 3 / encumbrance UI.
+- **&lt; 40** — Deprioritize unless strategic relationship.
+
+Automated output is **triage only**. Eka Life IC / legal still needs promoter diligence, title, encumbrance certificates, and confirmation that equity is actually sought at the project SPV level.
+
 ## Phase 1 — Live filters (listing discovery)
 
 | Checklist item | CLI / scraper mapping |
