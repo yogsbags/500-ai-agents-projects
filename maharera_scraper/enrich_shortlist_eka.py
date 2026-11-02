@@ -139,7 +139,16 @@ def full_enrich_projects_fixed(
                     )
                 last_error = None
                 break
-            except (sp.ScraperError, requests.Timeout, requests.ConnectionError) as exc:
+            except (
+                sp.ScraperError,
+                requests.Timeout,
+                requests.ConnectionError,
+                requests.HTTPError,
+            ) as exc:
+                if isinstance(exc, requests.HTTPError):
+                    status = exc.response.status_code if exc.response is not None else 0
+                    if status not in {429, 500, 502, 503, 504}:
+                        raise
                 last_error = exc
                 if attempt >= retries:
                     print(f"failed id {project_id} after {retries + 1} attempts: {exc}", file=sys.stderr)
