@@ -69,6 +69,17 @@ def ids_from_enrich_log(log_path: Path) -> set[int]:
     return ids
 
 
+def write_projects_checkpoint(path: Path, projects: list[dict]) -> None:
+    """Atomic compact JSON checkpoint; survives transient artifact FS errors."""
+    payload = json.dumps({"projects": projects}, ensure_ascii=False, separators=(",", ":"))
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(payload + "\n", encoding="utf-8")
+        tmp.replace(path)
+    except OSError as exc:
+        print(f"checkpoint write skipped ({path}): {exc}", file=sys.stderr)
+
+
 def full_enrich_projects_fixed(
     project_ids: list[int],
     projects_by_id: dict[int, dict],
@@ -133,10 +144,7 @@ def full_enrich_projects_fixed(
                     file=sys.stderr,
                 )
                 if checkpoint_json and len(enriched) % 5 == 0:
-                    checkpoint_json.write_text(
-                        json.dumps({"projects": enriched}, ensure_ascii=False, indent=2) + "\n",
-                        encoding="utf-8",
-                    )
+                    write_projects_checkpoint(checkpoint_json, enriched)
                 last_error = None
                 break
             except (
@@ -157,10 +165,7 @@ def full_enrich_projects_fixed(
         if last_error is not None:
             continue
     if checkpoint_json:
-        checkpoint_json.write_text(
-            json.dumps({"projects": enriched}, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        write_projects_checkpoint(checkpoint_json, enriched)
     return enriched
 
 
@@ -181,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--skip-log",
         default="",
-        help="Enrich log file; project ids already listed as enriched id N: are skipped.",
+        help="Enrich log; skip ids listed as enriched only when also present in --merge-existing-json.",
     )
     parser.add_argument("--out-json", default="/opt/cursor/artifacts/eka-shortlist-enriched.json")
     parser.add_argument("--out-screening-csv", default="/opt/cursor/artifacts/eka-shortlist-enriched-screening.csv")
@@ -195,12 +200,18 @@ def main(argv: list[str] | None = None) -> int:
     if not project_ids:
         print("No shortlist ids matched tier/score filters.", file=sys.stderr)
         return 0
-    skip = ids_from_enrich_log(Path(args.skip_log)) if args.skip_log else set()
-    if skip:
-        project_ids = [pid for pid in project_ids if pid not in skip]
     existing: list[dict] = []
     if args.merge_existing_json:
         existing = json.loads(Path(args.merge_existing_json).read_text(encoding="utf-8")).get("projects") or []
+    done_in_merge = {
+        int(row.get("project_id") or 0)
+        for row in existing
+        if str(row.get("project_id") or "").isdigit()
+    }
+    skip = ids_from_enrich_log(Path(args.skip_log)) if args.skip_log else set()
+    if skip:
+        skip &= done_in_merge
+        project_ids = [pid for pid in project_ids if pid not in skip]
     projects_by_id = load_projects(scrape_json)
     enriched = full_enrich_projects_fixed(
         project_ids,
