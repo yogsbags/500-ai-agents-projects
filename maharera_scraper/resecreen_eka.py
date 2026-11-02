@@ -80,6 +80,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("json_files", nargs="+", help="Paths to maharera-* scrape JSON files")
     parser.add_argument("--csv-prefix", default="/opt/cursor/artifacts/eka-rescreen")
     parser.add_argument("--merge-csv", default="/opt/cursor/artifacts/eka-konkan-combined-screening.csv")
+    parser.add_argument(
+        "--merge-scrape-json",
+        default="",
+        help="If set, merge input JSON project lists into this path.",
+    )
     parser.add_argument("--registered-within-days", type=int, default=9999)
     parser.add_argument("--min-score", type=int, default=0)
     parser.add_argument("--min-infusion-crore", type=float, default=500.0)
@@ -110,6 +115,9 @@ def main(argv: list[str] | None = None) -> int:
         csv_paths.append(csv_out)
         tier_a = sum(1 for r in payload["results"] if r.get("eka_tier") == "A")
         print(f"{path.name}: {payload['project_count']} projects, tier A={tier_a} -> {csv_out}")
+    if args.merge_scrape_json:
+        count = merge_scrape_jsons([Path(p) for p in args.json_files], Path(args.merge_scrape_json))
+        print(f"merged {count} scrape rows -> {args.merge_scrape_json}")
     if args.merge_csv and csv_paths:
         count = merge_csvs(csv_paths, Path(args.merge_csv))
         print(f"merged {count} rows -> {args.merge_csv}")
