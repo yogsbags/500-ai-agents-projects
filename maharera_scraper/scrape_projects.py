@@ -617,12 +617,16 @@ def _transport_failure(exc: BaseException) -> bool:
 
 
 def it_portal_ca_bundle() -> str:
-    """Trust store plus the intermediate the IT portal certificate omits.
+    """Trust store plus the intermediate the IT portal certificate ommits.
 
     The downloaded certificate is kept only when OpenSSL says it chains to a
     root already in the system store and its subject is the expected issuer.
     """
     import certifi
+
+    cached = os.environ.get("MAHARERA_CA_BUNDLE", "").strip()
+    if cached and os.path.isfile(cached):
+        return cached
 
     response = requests.get(
         GLOBALSIGN_R46_OV_2025_URL,
